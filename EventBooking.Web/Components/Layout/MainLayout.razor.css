@@ -1,0 +1,68 @@
+
+.eb-shell {
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    background: #101722;
+    color: #e5e7eb;
+}
+
+.eb-topbar {
+    height: 68px;
+    padding: 0 40px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    background: #182333;
+    border-bottom: 1px solid #293548;
+}
+
+.eb-brand {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    font-size: 19px;
+    font-weight: 700;
+    color: #f1f5f9;
+}
+
+.eb-brand-icon {
+    width: 38px;
+    height: 38px;
+    display: grid;
+    place-items: center;
+    border-radius: 9px;
+    background: #327b68;
+    color: white;
+    font-size: 14px;
+}
+
+.eb-topbar-label {
+    color: #94a3b8;
+    font-size: 13px;
+}
+
+.eb-content {
+    width: 100%;
+    flex: 1;
+    min-width: 0;
+}
+
+.eb-footer {
+    padding: 18px;
+    text-align: center;
+    color: #64748b;
+    border-top: 1px solid #293548;
+    font-size: 12px;
+}
+
+@media (max-width: 768px) {
+    .eb-topbar {
+        height: 60px;
+        padding: 0 18px;
+    }
+
+    .eb-topbar-label {
+        display: none;
+    }
+}

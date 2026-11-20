@@ -1,0 +1,39 @@
+using EventBooking.Web.Components;
+using EventBooking.Web.Services;
+
+var builder = WebApplication.CreateBuilder(args);
+
+// Add services to the container.
+builder.Services.AddRazorComponents()
+    .AddInteractiveServerComponents();
+
+builder.Services.AddHttpClient<EventBookingApi>(client =>
+{
+    var address = builder.Configuration[
+        "EventBookingApi:BaseUrl"]
+        ?? throw new InvalidOperationException(
+            "Missing EventBooking API URL.");
+
+    client.BaseAddress = new Uri(address);
+});
+
+var app = builder.Build();
+
+// Configure the HTTP request pipeline.
+if (!app.Environment.IsDevelopment())
+{
+    app.UseExceptionHandler("/Error", createScopeForErrors: true);
+    // The default HSTS value is 30 days. You may want to change this for production scenarios, see https://aka.ms/aspnetcore-hsts.
+    app.UseHsts();
+}
+
+app.UseHttpsRedirection();
+
+
+app.UseAntiforgery();
+
+app.MapStaticAssets();
+app.MapRazorComponents<App>()
+    .AddInteractiveServerRenderMode();
+
+app.Run();

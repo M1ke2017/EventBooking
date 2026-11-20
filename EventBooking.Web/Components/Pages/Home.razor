@@ -1,0 +1,1032 @@
+@page "/"
+@rendermode InteractiveServer
+@using EventBooking.Web.Services
+@implements IDisposable
+@inject EventBookingApi Api
+
+<PageTitle>Event Booking</PageTitle>
+
+<div class="eb-page">
+    <header class="eb-header">
+        <div>
+            <h1>Event Booking</h1>
+            <p>Panel zarządzania rezerwacjami i zasobami</p>
+        </div>
+        <span class="eb-version">Demo v0.1</span>
+    </header>
+
+    <nav class="eb-tabs">
+        <button type="button"
+                class="@(tab == "reservations" ? "active" : "")"
+                @onclick="ShowReservations">
+            Rezerwacje
+        </button>
+
+        <button type="button"
+                class="@(tab == "calendar" ? "active" : "")"
+                @onclick="ShowCalendar">
+            Kalendarz
+        </button>
+
+        <button type="button"
+                class="@(tab == "resources" ? "active" : "")"
+                @onclick="ShowResources">
+            Zasoby (@resources.Count)
+        </button>
+
+        <button type="button"
+                class="@(tab == "history" ? "active" : "")"
+                @onclick="ShowHistory">
+            Historia zdarzeń
+        </button>
+    </nav>
+
+    @if (!string.IsNullOrEmpty(error) ||
+         !string.IsNullOrEmpty(message))
+    {
+        <div class="eb-notification">
+            @if (!string.IsNullOrEmpty(error))
+            {
+                <div class="eb-error">@error</div>
+            }
+            else
+            {
+                <div class="eb-success">@message</div>
+            }
+        </div>
+    }
+
+    @if (tab == "resources")
+    {
+        <section class="eb-card">
+            <h2>
+                @(editingId.HasValue
+                    ? "Edytuj zasób"
+                    : "Nowy zasób")
+            </h2>
+
+            <div class="eb-form">
+                <label>
+                    Nazwa zasobu
+                    <input @bind="resourceName"
+                           placeholder="Sala konferencyjna A" />
+                </label>
+
+                <label>
+                    Liczba miejsc
+                    <input type="number"
+                           min="1"
+                           @bind="capacity" />
+                </label>
+
+                <button type="button"
+                        class="eb-primary"
+                        @onclick="SaveResource">
+                    @(editingId.HasValue
+                        ? "Zapisz zmiany"
+                        : "Dodaj zasób")
+                </button>
+
+                @if (editingId.HasValue)
+                {
+                    <button type="button"
+                            @onclick="ClearResourceForm">
+                        Anuluj edycję
+                    </button>
+                }
+            </div>
+        </section>
+
+        <section class="eb-card">
+            <h2>Lista zasobów</h2>
+
+            @if (resources.Count == 0)
+            {
+                <p class="eb-muted">
+                    Brak zasobów. Dodaj pierwszą salę.
+                </p>
+            }
+            else
+            {
+                <div class="eb-table-wrap">
+                    <table class="eb-table">
+                        <thead>
+                            <tr>
+                                <th>Nazwa</th>
+                                <th>Miejsca</th>
+                                <th>Akcje</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var resource in resources)
+                            {
+                                <tr>
+                                    <td>@resource.Name</td>
+                                    <td>@resource.Capacity</td>
+                                    <td>
+                                        <button type="button"
+                                                @onclick="() => EditResource(resource)">
+                                            Edytuj
+                                        </button>
+
+                                        <button type="button"
+                                                @onclick="() => DeleteResource(resource.Id)">
+                                            Usuń
+                                        </button>
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+        </section>
+    }
+    else if (tab == "calendar")
+    {
+        <section class="eb-card">
+            <h2>Kalendarz dostępności</h2>
+
+            <div class="eb-calendar-filters">
+                <label>
+                    Zasób
+                    <select @bind="calendarResourceId"
+                            @bind:after="ReloadCalendar">
+                        <option value="">Wybierz zasób</option>
+
+                        @foreach (var resource in resources)
+                        {
+                            <option value="@resource.Id">
+                                @resource.Name
+                            </option>
+                        }
+                    </select>
+                </label>
+
+                <label>
+                    Data
+                    <input type="date"
+                           @bind="calendarDate"
+                           @bind:after="ReloadCalendar" />
+                </label>
+            </div>
+
+            @if (string.IsNullOrEmpty(calendarResourceId))
+            {
+                <p class="eb-muted">
+                    Wybierz zasób, aby zobaczyć jego dostępność.
+                </p>
+            }
+            else
+            {
+                <h3>@calendarDate.ToString("dd.MM.yyyy")</h3>
+
+                <p class="eb-muted">
+                    Kliknij wolną godzinę, aby ją zarezerwować.
+                    Zajęty termin pokazuje identyfikator rezerwującego.
+                </p>
+
+                <div class="eb-slots">
+                    @for (var hour = 8; hour < 20; hour++)
+                    {
+                        var slotStart = CalendarTime(hour);
+                        var slotEnd = CalendarTime(hour + 1);
+
+                        var active = reservedPeriods.FirstOrDefault(r =>
+                            !r.IsCancelled &&
+                            r.Start < slotEnd &&
+                            r.End > slotStart);
+
+                        var released = active is null &&
+                            reservedPeriods.Any(r =>
+                                r.IsCancelled &&
+                                r.Start < slotEnd &&
+                                r.End > slotStart);
+
+                        var past = slotStart <= DateTimeOffset.Now;
+                        var occupied = active is not null;
+
+                        var state = occupied
+                            ? "busy"
+                            : past
+                                ? "past"
+                                : "available";
+
+                        <button type="button"
+                                class="eb-slot @state"
+                                disabled="@(past && !occupied)"
+                                title="@(occupied
+                                                                ? $"Rezerwujący (ID demo): {active!.UserId}"
+                                                                : past
+                                                                    ? "Termin minął"
+                                                                    : "Kliknij, aby zarezerwować")"
+                        @onclick="() => SelectCalendarSlot(
+                                                        slotStart, slotEnd, active)">
+
+<strong>
+                        @($"{hour:00}:00–{hour + 1:00}:00")
+                    </strong>
+
+                    <span>
+                        @(occupied
+                            ? "Zajęte"
+                            : past
+                                ? "Minione"
+                                : "Wolne")
+                    </span>
+                </button>
+            }
+        </div>
+
+        @if (selectedBusyPeriod is not null)
+        {
+            <div class="eb-calendar-action">
+                <h3>Zajęty termin</h3>
+
+                <p>
+                    <b>Rezerwujący (ID demo):</b>
+                    @selectedBusyPeriod.UserId
+                </p>
+
+                <p>
+                    <b>Rezerwacja:</b>
+                    @selectedBusyPeriod.ReservationId
+                </p>
+
+                <p>
+                    <b>Od:</b>
+                    @selectedBusyPeriod.Start
+                    .ToLocalTime()
+                    .ToString("dd.MM.yyyy HH:mm")
+                </p>
+
+                <p>
+                    <b>Do:</b>
+                    @selectedBusyPeriod.End
+                    .ToLocalTime()
+                    .ToString("dd.MM.yyyy HH:mm")
+                </p>
+
+                <button type="button"
+                        @onclick="() => OpenCalendarReservation(
+                                                        selectedBusyPeriod.ReservationId)">
+Otwórz szczegóły
+</button>
+
+                @if (selectedBusyPeriod.UserId == DemoUserId &&
+                     selectedBusyPeriod.Start >
+                     DateTimeOffset.UtcNow.AddMinutes(5))
+                {
+                    <button type="button"
+                            class="eb-danger"
+                            @onclick="CancelFromCalendar">
+                        Zwolnij termin
+                    </button>
+                }
+                else
+                {
+                    <p class="eb-muted">
+                        Zwolnienie terminu jest dostępne
+                        dla identyfikatora demo najpóźniej
+                        5 minut przed rozpoczęciem.
+                    </p>
+                }
+            </div>
+        }
+        else if (selectedFreeStart.HasValue &&
+                 selectedFreeEnd.HasValue)
+        {
+            <div class="eb-calendar-action">
+                <h3>Potwierdź rezerwację</h3>
+
+                <p>
+                    <b>Sala:</b>
+                    @ResourceName(Guid.Parse(calendarResourceId))
+                </p>
+
+                <p>
+                    <b>Termin:</b>
+                    @selectedFreeStart.Value
+                    .ToLocalTime()
+                    .ToString("dd.MM.yyyy HH:mm")
+                    –
+                    @selectedFreeEnd.Value
+                    .ToLocalTime()
+                    .ToString("HH:mm")
+                </p>
+
+                <label class="eb-user-label">
+                    ID rezerwującego (demo)
+                    <input @bind="userId" />
+                </label>
+
+                <button type="button"
+                        class="eb-primary"
+                        @onclick="ConfirmCalendarBooking">
+                    Potwierdź rezerwację
+                </button>
+
+                <button type="button"
+                        @onclick="ClearCalendarSelection">
+                    Zamknij
+                </button>
+            </div>
+        }
+
+        <h3>Aktywne rezerwacje</h3>
+
+        @if (!reservedPeriods.Any(r => !r.IsCancelled))
+        {
+            <p class="eb-muted">
+                Brak aktywnych rezerwacji w wybranym dniu.
+            </p>
+        }
+        else
+        {
+            @foreach (var period in reservedPeriods.Where(
+                r => !r.IsCancelled))
+            {
+                <div class="eb-booked-period"
+                     @key="period.ReservationId">
+                    <span>
+                        @($"{period.Start.ToLocalTime():dd.MM.yyyy HH:mm} – {period.End.ToLocalTime():dd.MM.yyyy HH:mm}")
+
+                        · ID: @(period.UserId.ToString()[..8])…
+                    </span>
+
+                    <button type="button"
+                            @onclick="() => OpenCalendarReservation(period.ReservationId)">
+                    Szczegóły
+                    </button>
+                </div>
+            }
+
+        }
+
+        <p class="eb-muted">
+            Zwolnione godziny można rezerwować ponownie.
+            Statusy odczytujemy z projekcji Marten.
+        </p>
+    }
+</section>
+    }
+    else if (tab == "history")
+{
+    <section class="eb-card">
+        <h2>Historia zdarzeń rezerwacji</h2>
+
+        <div class="eb-form">
+            <label>
+                Identyfikator rezerwacji
+                <input @bind="reservationId"
+                       placeholder="Identyfikator rezerwacji" />
+            </label>
+
+            <button type="button"
+                    @onclick="LoadHistory">
+                Wczytaj historię
+            </button>
+        </div>
+
+        @if (history.Count == 0)
+        {
+            <p class="eb-muted">
+                Brak zdarzeń do wyświetlenia.
+            </p>
+        }
+        else
+        {
+            <div class="eb-history">
+                @foreach (var item in history)
+                {
+                    <div class="eb-event" @key="item.Version">
+                        <strong>
+                            @item.Version. @item.EventType
+                        </strong>
+
+                        <small>
+                            @item.Timestamp.ToLocalTime()
+                            .ToString("dd.MM.yyyy HH:mm:ss")
+                        </small>
+
+                        <details>
+                            <summary>Dane zdarzenia</summary>
+                            <pre>@item.Data.ToString()</pre>
+                        </details>
+                    </div>
+                }
+            </div>
+        }
+    </section>
+}
+else
+{
+    <div class="eb-columns">
+        <div>
+            <section class="eb-card">
+                <h2>Nowa rezerwacja</h2>
+
+                <div class="eb-form">
+                    <label>
+                        Zasób
+                        <select @bind="selectedResource">
+                            <option value="">
+                                Wybierz zasób
+                            </option>
+
+                            @foreach (var resource in resources)
+                            {
+                                <option value="@resource.Id">
+                                    @resource.Name
+                                </option>
+                            }
+                        </select>
+                    </label>
+
+                    <label>
+                        ID użytkownika (demo)
+                        <input @bind="userId" />
+                    </label>
+
+                    <label>
+                        Początek
+                        <input type="datetime-local"
+                               @bind="start" />
+                    </label>
+
+                    <label>
+                        Koniec
+                        <input type="datetime-local"
+                               @bind="end" />
+                    </label>
+
+                    <button type="button"
+                            class="eb-primary"
+                            @onclick="CreateReservation">
+                        Utwórz rezerwację
+                    </button>
+                </div>
+            </section>
+
+            <section class="eb-card">
+                <h2>Znajdź rezerwację</h2>
+
+                <div class="eb-form">
+                    <input @bind="reservationId"
+                           placeholder="Identyfikator rezerwacji" />
+
+                    <button type="button"
+                            @onclick="LoadReservation">
+                        Pokaż rezerwację
+                    </button>
+                </div>
+            </section>
+        </div>
+
+        <div>
+            <section class="eb-card">
+                <h2>Szczegóły rezerwacji</h2>
+
+                @if (reservation is null)
+                {
+                    <p class="eb-muted">
+                        Wybierz lub utwórz rezerwację.
+                    </p>
+                }
+                else
+                {
+                    <div class="eb-details">
+                        <p>
+                            <b>ID:</b> @reservation.Id
+                        </p>
+                        <p>
+                            <b>Zasób:</b>
+                            @ResourceName(reservation.ResourceId)
+                        </p>
+                        <p>
+                           <b>Od:</b>
+                            @(reservation.Start.ToLocalTime().ToString("dd.MM.yyyy HH:mm"))
+                        </p>
+
+                        <p>
+                            <b>Do:</b>
+                            @(reservation.End.ToLocalTime().ToString("dd.MM.yyyy HH:mm"))
+                        </p>
+                        <p>
+                            <b>Status:</b>
+                            @(reservation.IsCancelled
+                                ? "Anulowana"
+                                : "Aktywna")
+                        </p>
+                    </div>
+
+                    @if (!reservation.IsCancelled)
+                    {
+                        <div class="eb-form">
+                            <h3>Zmień termin</h3>
+
+                            <input type="datetime-local"
+                                   @bind="start" />
+
+                            <input type="datetime-local"
+                                   @bind="end" />
+
+                            <button type="button"
+                                    @onclick="Reschedule"
+                                    @onclick:preventDefault="true">
+                                Przesuń rezerwację
+                            </button>
+
+                            <h3>Zmień zasób</h3>
+
+                            <select @bind="selectedResource">
+                                <option value="">
+                                    Wybierz zasób
+                                </option>
+
+                                @foreach (var resource in resources)
+                                {
+                                    <option value="@resource.Id">
+                                        @resource.Name
+                                    </option>
+                                }
+                            </select>
+
+                            <button type="button"
+                                    @onclick="ChangeResource">
+                                Zmień zasób
+                            </button>
+
+                            <button type="button"
+                                    class="eb-danger"
+                                    @onclick="CancelReservation">
+                                Anuluj rezerwację
+                            </button>
+                        </div>
+                    }
+
+                    <p>
+                        <button type="button"
+                                @onclick="ShowHistory">
+                            Pokaż historię zdarzeń
+                        </button>
+                    </p>
+                }
+            </section>
+        </div>
+    </div>
+}
+</div>
+
+@code {
+    private string tab = "reservations";
+
+    private List<ResourceDto> resources = [];
+    private ReservationDto? reservation;
+    private List<HistoryDto> history = [];
+
+    private string error = "";
+    private string message = "";
+
+    private int notificationVersion;
+    private bool disposed;
+
+    private string resourceName = "";
+    private int capacity = 12;
+    private Guid? editingId;
+
+    private string selectedResource = "";
+    private string userId =
+        "22222222-2222-2222-2222-222222222222";
+
+    private string reservationId = "";
+
+    private DateTime start =
+        new(2026, 12, 2, 10, 0, 0);
+
+    private DateTime end =
+        new(2026, 12, 2, 11, 0, 0);
+
+    private string calendarResourceId = "";
+
+    private DateTime calendarDate =
+        new(2026, 12, 3);
+
+    private List<ReservedPeriodDto> reservedPeriods = [];
+
+    private DateTimeOffset? selectedFreeStart;
+    private DateTimeOffset? selectedFreeEnd;
+
+    private ReservedPeriodDto? selectedBusyPeriod;
+
+    private static readonly Guid DemoUserId = Guid.Parse(
+        "22222222-2222-2222-2222-222222222222");
+
+    protected override async Task OnInitializedAsync()
+    {
+        await Execute(RefreshResources);
+    }
+
+    private void ShowReservations()
+    {
+        tab = "reservations";
+    }
+
+    private void ShowResources()
+    {
+        tab = "resources";
+    }
+
+    private void ShowHistory()
+    {
+        tab = "history";
+    }
+
+    private Task ShowCalendar()
+    {
+        tab = "calendar";
+
+        if (string.IsNullOrEmpty(calendarResourceId) &&
+            resources.Count > 0)
+        {
+            calendarResourceId = resources[0].Id.ToString();
+        }
+
+        return ReloadCalendar();
+    }
+
+    private async Task Execute(Func<Task> action)
+    {
+        notificationVersion++;
+
+        error = "";
+        message = "";
+
+        try
+        {
+            await action();
+        }
+        catch (Exception ex)
+        {
+            error = ex.Message;
+        }
+
+        if (!string.IsNullOrEmpty(error) ||
+            !string.IsNullOrEmpty(message))
+        {
+            _ = HideNotificationAsync();
+        }
+    }
+
+   
+    private async Task HideNotificationAsync()
+    {
+        var version = ++notificationVersion;
+
+        await Task.Delay(4000);
+
+        if (disposed || version != notificationVersion)
+            return;
+
+        await InvokeAsync(() =>
+        {
+            if (disposed || version != notificationVersion)
+                return;
+
+            message = "";
+            error = "";
+            StateHasChanged();
+        });
+    }
+
+
+    private async Task RefreshResources()
+    {
+        resources = await Api.GetResourcesAsync();
+    }
+
+    private Task SaveResource() => Execute(async () =>
+    {
+        if (string.IsNullOrWhiteSpace(resourceName) ||
+            capacity <= 0)
+        {
+            throw new InvalidOperationException(
+                "Podaj nazwę i poprawną liczbę miejsc.");
+        }
+
+        if (editingId.HasValue)
+        {
+            await Api.UpdateResourceAsync(
+                editingId.Value, resourceName, capacity);
+        }
+        else
+        {
+            await Api.CreateResourceAsync(
+                resourceName, capacity);
+        }
+
+        ClearResourceForm();
+
+        await RefreshResources();
+
+        message = "Zasób został zapisany.";
+    });
+
+    private void EditResource(ResourceDto resource)
+    {
+        editingId = resource.Id;
+        resourceName = resource.Name;
+        capacity = resource.Capacity;
+    }
+
+    private void ClearResourceForm()
+    {
+        editingId = null;
+        resourceName = "";
+        capacity = 12;
+    }
+
+    private Task DeleteResource(Guid id) => Execute(async () =>
+    {
+        await Api.DeleteResourceAsync(id);
+
+        await RefreshResources();
+
+        message = "Zasób został usunięty.";
+    });
+
+    private Task CreateReservation() => Execute(async () =>
+    {
+        if (!Guid.TryParse(selectedResource, out var resourceId) ||
+            !Guid.TryParse(userId, out var user) ||
+            resourceId == Guid.Empty ||
+            user == Guid.Empty)
+        {
+            throw new InvalidOperationException(
+                "Wybierz zasób i podaj poprawne ID użytkownika.");
+        }
+
+        if (start >= end)
+        {
+            throw new InvalidOperationException(
+                "Data zakończenia musi być późniejsza niż rozpoczęcia.");
+        }
+
+        var id = await Api.CreateReservationAsync(
+            resourceId,
+            user,
+            new DateTimeOffset(start),
+            new DateTimeOffset(end));
+
+        reservationId = id.ToString();
+
+        await RefreshReservation();
+
+        message = "Rezerwacja została utworzona.";
+    });
+
+    private Task LoadReservation()
+    {
+        return Execute(RefreshReservation);
+    }
+
+    private async Task RefreshReservation()
+    {
+        if (!Guid.TryParse(reservationId, out var id) ||
+            id == Guid.Empty)
+        {
+            throw new InvalidOperationException(
+                "Niepoprawny identyfikator rezerwacji.");
+        }
+
+        var loaded = await Api.GetReservationAsync(id);
+
+        if (loaded is null)
+        {
+            reservation = null;
+            history = [];
+
+            throw new InvalidOperationException(
+                "Nie znaleziono rezerwacji.");
+        }
+
+        reservation = loaded;
+
+        history = await Api.GetHistoryAsync(id);
+
+        selectedResource = loaded.ResourceId.ToString();
+
+        start = loaded.Start.LocalDateTime;
+        end = loaded.End.LocalDateTime;
+    }
+
+    private Task LoadHistory() => Execute(async () =>
+    {
+        history = [];
+
+        if (!Guid.TryParse(reservationId, out var id) ||
+            id == Guid.Empty)
+        {
+            throw new InvalidOperationException(
+                "Niepoprawny identyfikator rezerwacji.");
+        }
+
+        history = await Api.GetHistoryAsync(id);
+
+        if (history.Count == 0)
+        {
+            throw new InvalidOperationException(
+                "Nie znaleziono historii tej rezerwacji.");
+        }
+    });
+
+    private Task CancelReservation() => Execute(async () =>
+    {
+        if (reservation is null)
+            return;
+
+        await Api.CancelAsync(reservation.Id);
+
+        await RefreshReservation();
+
+        message = "Rezerwacja została anulowana.";
+    });
+
+    private Task Reschedule() => Execute(async () =>
+    {
+        if (reservation is null)
+            return;
+
+        var newStart = new DateTimeOffset(start);
+        var newEnd = new DateTimeOffset(end);
+
+        if (newStart >= newEnd)
+        {
+            throw new InvalidOperationException(
+                "Data zakończenia musi być późniejsza niż rozpoczęcia.");
+        }
+
+        if (reservation.Start == newStart &&
+            reservation.End == newEnd)
+        {
+            message = "Termin rezerwacji nie został zmieniony.";
+            return;
+        }
+
+        await Api.RescheduleAsync(
+            reservation.Id, newStart, newEnd);
+
+        await RefreshReservation();
+
+        message = "Termin został zmieniony.";
+    });
+
+    private Task ChangeResource() => Execute(async () =>
+    {
+        if (reservation is null)
+            return;
+
+        if (!Guid.TryParse(selectedResource, out var id) ||
+            id == Guid.Empty)
+        {
+            throw new InvalidOperationException(
+                "Wybierz zasób.");
+        }
+
+        if (id == reservation.ResourceId)
+        {
+            message = "Zasób rezerwacji nie został zmieniony.";
+            return;
+        }
+
+        await Api.ChangeResourceAsync(reservation.Id, id);
+
+        await RefreshReservation();
+
+        message = "Zasób rezerwacji został zmieniony.";
+    });
+
+    private Task ReloadCalendar() => Execute(async () =>
+    {
+        reservedPeriods = [];
+
+        ClearCalendarSelection();
+
+        if (!Guid.TryParse(calendarResourceId, out var resourceId))
+            return;
+
+        reservedPeriods = await Api.GetReservedPeriodsAsync(
+            resourceId,
+            CalendarTime(0),
+            CalendarTime(24));
+    });
+
+    private DateTimeOffset CalendarTime(int hour)
+    {
+        return new DateTimeOffset(
+            calendarDate.Date.AddHours(hour));
+    }
+
+    private void SelectCalendarSlot(
+        DateTimeOffset slotStart,
+        DateTimeOffset slotEnd,
+        ReservedPeriodDto? occupied)
+    {
+        ClearCalendarSelection();
+
+        if (occupied is not null)
+        {
+            selectedBusyPeriod = occupied;
+        }
+        else if (slotStart > DateTimeOffset.Now)
+        {
+            selectedFreeStart = slotStart;
+            selectedFreeEnd = slotEnd;
+        }
+    }
+
+    private void ClearCalendarSelection()
+    {
+        selectedFreeStart = null;
+        selectedFreeEnd = null;
+        selectedBusyPeriod = null;
+    }
+
+    private Task ConfirmCalendarBooking() => Execute(async () =>
+    {
+        if (!selectedFreeStart.HasValue ||
+            !selectedFreeEnd.HasValue ||
+            !Guid.TryParse(calendarResourceId, out var resourceId) ||
+            !Guid.TryParse(userId, out var bookingUser) ||
+            bookingUser == Guid.Empty)
+        {
+            throw new InvalidOperationException(
+                "Wybierz termin i poprawny identyfikator użytkownika.");
+        }
+
+        var id = await Api.CreateReservationAsync(
+            resourceId,
+            bookingUser,
+            selectedFreeStart.Value,
+            selectedFreeEnd.Value);
+
+        reservationId = id.ToString();
+
+        await ReloadCalendarDataAsync();
+
+        message = "Termin został zarezerwowany.";
+    });
+
+    private Task CancelFromCalendar() => Execute(async () =>
+    {
+        if (selectedBusyPeriod is null)
+            return;
+
+        if (selectedBusyPeriod.UserId != DemoUserId)
+        {
+            throw new InvalidOperationException(
+                "Możesz zwolnić tylko rezerwację przypisaną do konta demonstracyjnego.");
+        }
+
+        await Api.CancelAsync(
+            selectedBusyPeriod.ReservationId);
+
+        await ReloadCalendarDataAsync();
+
+        message = "Termin został zwolniony.";
+    });
+
+    private async Task ReloadCalendarDataAsync()
+    {
+        ClearCalendarSelection();
+
+        if (Guid.TryParse(
+            calendarResourceId, out var resourceId))
+        {
+            reservedPeriods = await Api.GetReservedPeriodsAsync(
+                resourceId,
+                CalendarTime(0),
+                CalendarTime(24));
+        }
+    }
+
+    private Task OpenCalendarReservation(Guid id)
+    {
+        reservationId = id.ToString();
+        tab = "reservations";
+
+        return Execute(RefreshReservation);
+    }
+
+    private string ResourceName(Guid id)
+    {
+        return resources.FirstOrDefault(r => r.Id == id)?.Name
+            ?? id.ToString();
+    }
+
+    public void Dispose()
+    {
+        disposed = true;
+        notificationVersion++;
+    }
+}

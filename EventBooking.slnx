@@ -1,0 +1,12 @@
+<Solution>
+  <Folder Name="/Elementy rozwiązania/">
+    <File Path="ci.yml" />
+    <File Path="docker-compose.yml" />
+  </Folder>
+  <Project Path="EventBooking.Api/EventBooking.Api.csproj" />
+  <Project Path="EventBooking.Application/EventBooking.Application.csproj" />
+  <Project Path="EventBooking.Domain/EventBooking.Domain.csproj" />
+  <Project Path="EventBooking.Infrastructure/EventBooking.Infrastructure.csproj" />
+  <Project Path="EventBooking.Tests/EventBooking.Tests.csproj" />
+  <Project Path="EventBooking.Web/EventBooking.Web.csproj" />
+</Solution>
